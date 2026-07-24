@@ -1,0 +1,38 @@
+[
+  {
+    "datalen": 1023,
+    "status": 200,
+    "bytes": 133459,
+    "rows": 1023,
+    "first": "2026-07-20 13:48:00",
+    "last": "2026-07-24 15:00:00",
+    "has_20260717": false
+  },
+  {
+    "datalen": 3000,
+    "status": 200,
+    "bytes": 4,
+    "rows": 0,
+    "first": "",
+    "last": "",
+    "has_20260717": false
+  },
+  {
+    "datalen": 5000,
+    "status": 200,
+    "bytes": 4,
+    "rows": 0,
+    "first": "",
+    "last": "",
+    "has_20260717": false
+  },
+  {
+    "datalen": 10000,
+    "status": 200,
+    "bytes": 4,
+    "rows": 0,
+    "first": "",
+    "last": "",
+    "has_20260717": false
+  }
+]
