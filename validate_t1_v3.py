@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from pathlib import Path
+import json
 import requests
 
 out=Path(__file__).resolve().parent/'results'
 out.mkdir(exist_ok=True)
-urls=[
- 'https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=sh600992&scale=5&ma=no&datalen=1023',
- 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sh600992&scale=5&ma=no&datalen=1023'
-]
-parts=[]
-for url in urls:
+results=[]
+for n in [1023,3000,5000,10000]:
+    url=f'https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=sh600992&scale=1&ma=no&datalen={n}'
     try:
-        r=requests.get(url,timeout=10,headers={'User-Agent':'Mozilla/5.0','Referer':'https://finance.sina.com.cn/'})
-        parts.append('URL='+url+'\nstatus='+str(r.status_code)+' bytes='+str(len(r.content))+'\n'+r.text[:30000])
+        r=requests.get(url,timeout=15,headers={'User-Agent':'Mozilla/5.0','Referer':'https://finance.sina.com.cn/'})
+        data=r.json() if r.text.strip().startswith('[') else []
+        days=[str(x.get('day','')) for x in data if isinstance(x,dict)]
+        results.append({'datalen':n,'status':r.status_code,'bytes':len(r.content),'rows':len(data),'first':days[0] if days else '', 'last':days[-1] if days else '', 'has_20260717':any(d.startswith('2026-07-17') for d in days)})
     except Exception as e:
-        parts.append('URL='+url+'\nerror='+repr(e))
-result='\n\n==========\n\n'.join(parts)
-(out/'tick_probe.txt').write_text(result,encoding='utf-8')
-print(result[:5000])
+        results.append({'datalen':n,'error':repr(e)})
+text=json.dumps(results,ensure_ascii=False,indent=2)
+(out/'tick_probe.txt').write_text(text,encoding='utf-8')
+print(text)
