@@ -5,12 +5,14 @@ on:
     paths:
       - validate_t1.py
       - validate_t1_v2.py
+      - validate_t1_v3.py
       - samples.csv
       - .github/workflows/run_t1_validation.yml
   pull_request:
     paths:
       - validate_t1.py
       - validate_t1_v2.py
+      - validate_t1_v3.py
       - probe_source.py
       - samples.csv
       - run_trigger.txt
@@ -38,7 +40,9 @@ jobs:
 
       - name: Run final validation
         run: |
-          if [ -f validate_t1_v2.py ]; then
+          if [ -f validate_t1_v3.py ]; then
+            python validate_t1_v3.py
+          elif [ -f validate_t1_v2.py ]; then
             python validate_t1_v2.py
           elif [ -f probe_source.py ]; then
             python probe_source.py
