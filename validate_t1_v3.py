@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import math
+import math, re
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import pandas as pd
@@ -9,6 +9,7 @@ import requests
 import validate_t1 as v
 
 ROOT=Path(__file__).resolve().parent
+OUT=ROOT/'results'; OUT.mkdir(exist_ok=True)
 SAMPLES=pd.read_csv(ROOT/'samples.csv',dtype=str)
 SIGNAL=set(zip(SAMPLES.signal_date,SAMPLES.ts_code))
 S=requests.Session(); S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://gu.qq.com/'})
@@ -32,6 +33,42 @@ def clean(d,date,code):
     if x.empty or x.trade_time.max().strftime('%H:%M')<need or len(x[x.trade_time.dt.strftime('%H:%M')<=need])<minimum:
         raise ValueError(f'incomplete {date} {code} rows={len(x)}')
     return x[['trade_time','open','close','high','low','vol','amount']]
+
+def tx_ticks(date,code):
+    code2=sym(code)
+    url=f'https://stock.gtimg.cn/data/index.php?appn=detail&action=download&c={code2}&d={date}'
+    r=S.get(url,timeout=15); r.raise_for_status()
+    raw=r.content
+    text=raw.decode('gb18030',errors='replace').replace('\ufeff','')
+    (OUT/f'tick_raw_{date}_{code2}.txt').write_text(text[:20000],encoding='utf-8')
+    ticks=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line: continue
+        parts=line.split('\t')
+        if len(parts)<4: parts=re.split(r'\s+',line)
+        if len(parts)>=4 and re.fullmatch(r'\d{2}:\d{2}:\d{2}',parts[0]):
+            try:
+                t=parts[0]; p=float(parts[1].replace(',','')); vol=float(parts[3].replace(',',''))
+                amt=float(parts[4].replace(',','')) if len(parts)>4 and re.fullmatch(r'-?[\d,.]+',parts[4]) else p*vol*100
+                ticks.append((t,p,vol,amt))
+            except Exception: pass
+    if not ticks:
+        for seg in text.replace('\n','').split('|'):
+            a=seg.split('/')
+            try:
+                idx=next(i for i,z in enumerate(a) if re.fullmatch(r'\d{2}:\d{2}:\d{2}',z))
+                t=a[idx]; p=float(a[idx+1]); vol=float(a[idx+3]); amt=float(a[idx+4]) if len(a)>idx+4 else p*vol*100
+                ticks.append((t,p,vol,amt))
+            except Exception: pass
+    if not ticks: raise ValueError(f'no tick rows; bytes={len(raw)} head={text[:300]!r}')
+    day=f'{date[:4]}-{date[4:6]}-{date[6:]}'
+    df=pd.DataFrame(ticks,columns=['time','price','vol','amount'])
+    df['trade_time']=pd.to_datetime(day+' '+df['time'])
+    df=df[(df.trade_time.dt.strftime('%H:%M')>='09:30')&(df.trade_time.dt.strftime('%H:%M')<='15:00')].sort_values('trade_time')
+    df['minute']=df.trade_time.dt.floor('min')
+    bars=df.groupby('minute',as_index=False).agg(open=('price','first'),close=('price','last'),high=('price','max'),low=('price','min'),vol=('vol','sum'),amount=('amount','sum')).rename(columns={'minute':'trade_time'})
+    return clean(bars,date,code)
 
 def tx_day(date,code):
     code2=sym(code); r=S.get(f'https://web.ifzq.gtimg.cn/appstock/app/day/query?code={code2}',timeout=6); r.raise_for_status(); j=r.json()
@@ -68,10 +105,12 @@ def east(date,code):
     return clean(pd.DataFrame(rows),date,code)
 
 def minute(date,code):
-    if (date,code) in SIGNAL:
-        sources=[('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
+    if date=='20260717':
+        sources=[('tencent_ticks',lambda:tx_ticks(date,code)),('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent_day',lambda:tx_day(date,code))]
+    elif (date,code) in SIGNAL:
+        sources=[('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent_ticks',lambda:tx_ticks(date,code)),('tencent_day',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
     else:
-        sources=[('tencent',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
+        sources=[('tencent_day',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
     errs=[]
     for name,fn in sources:
         try:
