@@ -1,4 +1,5 @@
 name: Run T1 validation
+# trigger: sanitized-corrected-final-v1
 
 on:
   push:
