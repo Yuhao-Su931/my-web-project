@@ -1,2 +1,2 @@
 ﻿total_samples,completed_samples,not_completed_samples,profit_samples,non_loss_samples,loss_samples,win_rate_pct,non_loss_rate_pct,average_net_return_pct,median_net_return_pct,max_net_return_pct,min_net_return_pct
-35,2,33,2,2,0,100.0,100.0,4.56753292160742,4.56753292160742,7.322431807860363,1.8126340353544768
+35,28,7,19,19,9,67.85714285714286,67.85714285714286,1.9558100298649184,1.5467160148303516,11.190125733742384,-6.471643919656456
