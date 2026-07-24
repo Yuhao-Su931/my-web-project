@@ -6,6 +6,11 @@ on:
       - validate_t1.py
       - samples.csv
       - .github/workflows/run_t1_validation.yml
+  pull_request:
+    paths:
+      - validate_t1.py
+      - samples.csv
+      - run_trigger.txt
   workflow_dispatch:
 
 permissions:
@@ -31,7 +36,14 @@ jobs:
       - name: Run all 35 samples
         run: python validate_t1.py
 
-      - name: Commit results
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: t1-validation-results
+          path: results/
+
+      - name: Commit results on push only
+        if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
