@@ -2,15 +2,7 @@ name: Run T1 validation
 
 on:
   push:
-    paths:
-      - validate_t1.py
-      - samples.csv
-      - .github/workflows/run_t1_validation.yml
   pull_request:
-    paths:
-      - validate_t1.py
-      - samples.csv
-      - run_trigger.txt
   workflow_dispatch:
 
 permissions:
@@ -22,35 +14,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install pandas requests
-
-      - name: Run all 35 samples
-        run: python validate_t1.py
-
-      - name: Upload results artifact
+      - name: Probe minute coverage
+        run: python probe_minutes.py
+      - name: Upload probe
         uses: actions/upload-artifact@v4
         with:
-          name: t1-validation-results
-          path: results/
-
-      - name: Commit results on push only
-        if: github.event_name == 'push'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add results/
-          if git diff --cached --quiet; then
-            echo "No result changes"
-          else
-            git commit -m "Add 35-sample T+1 validation results"
-            git push
-          fi
+          name: minute-probe
+          path: probe_result.json
