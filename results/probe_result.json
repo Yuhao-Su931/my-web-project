@@ -1,7 +1,7 @@
 {
   "status": 200,
   "url": "https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=1.600992&ndays=10&iscr=0&iscca=0&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58",
-  "text_head": "{\"rc\":102,\"rt\":1,\"svr\":177617932,\"lt\":2,\"full\":1,\"dlmkts\":\"\",\"dsc\":\"0\",\"data\":null}",
+  "text_head": "{\"rc\":102,\"rt\":1,\"svr\":177617937,\"lt\":2,\"full\":1,\"dlmkts\":\"\",\"dsc\":\"0\",\"data\":null}",
   "rows": 0,
   "dates": [],
   "sample": []
