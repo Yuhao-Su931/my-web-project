@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Final wrapper: correct Eastmoney OHLC and reject incomplete minute files."""
+"""Final wrapper: correct OHLC, clean zero auction prices, reject incomplete files."""
 import pandas as pd
 import validate_t1_v2 as v
 
@@ -38,6 +38,23 @@ def corrected_eastmoney(date, code):
 v.minute_eastmoney = corrected_eastmoney
 
 
+def sanitize_prices(frame):
+    frame = frame.copy()
+    for col in ['open', 'close', 'high', 'low']:
+        frame[col] = pd.to_numeric(frame[col], errors='coerce')
+    frame['close'] = frame['close'].replace(0, pd.NA).ffill().bfill()
+    frame['open'] = frame['open'].where(frame['open'] > 0, frame['close'])
+    fallback_high = frame[['open', 'close']].max(axis=1)
+    fallback_low = frame[['open', 'close']].min(axis=1)
+    frame['high'] = frame['high'].where(frame['high'] > 0, fallback_high)
+    frame['low'] = frame['low'].where(frame['low'] > 0, fallback_low)
+    frame['high'] = pd.concat([frame['high'], fallback_high], axis=1).max(axis=1)
+    frame['low'] = pd.concat([frame['low'], fallback_low], axis=1).min(axis=1)
+    if frame[['open', 'close', 'high', 'low']].isna().any().any():
+        raise ValueError('unrepairable zero/NA price')
+    return frame
+
+
 def complete_minute(date, code):
     global _call_number
     is_signal_day_call = (_call_number % 2 == 0)
@@ -51,7 +68,7 @@ def complete_minute(date, code):
         ('tencent', v.minute_tencent),
     ]:
         try:
-            frame = getter(date, code)
+            frame = sanitize_prices(getter(date, code))
             if frame.empty:
                 raise ValueError('empty minute data')
             last_time = frame.trade_time.max().strftime('%H:%M')
