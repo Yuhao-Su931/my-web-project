@@ -1,151 +1,162 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import math, re
-from decimal import Decimal, ROUND_HALF_UP
+
+import math
 from pathlib import Path
+
 import pandas as pd
 import requests
+
 import validate_t1 as v
 
-ROOT=Path(__file__).resolve().parent
-OUT=ROOT/'results'; OUT.mkdir(exist_ok=True)
-SAMPLES=pd.read_csv(ROOT/'samples.csv',dtype=str)
-SIGNAL=set(zip(SAMPLES.signal_date,SAMPLES.ts_code))
-S=requests.Session(); S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://gu.qq.com/'})
-ORIG_MIN=v.minute_for; ORIG_DAILY=v.daily_for; ORIG_LIMITS=v.limits_for; ORIG_ENTRY=v.find_entry
+ROOT = Path(__file__).resolve().parent
+SAMPLES = pd.read_csv(ROOT / 'samples.csv', dtype=str)
+SESSION = requests.Session()
+SESSION.headers.update({'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/'})
 
-def sym(code):
-    n=code.split('.')[0]
-    return ('sh' if code.endswith('.SH') else 'sz' if code.endswith('.SZ') else 'bj')+n
 
-def clean(d,date,code):
-    x=d.copy(); x['trade_time']=pd.to_datetime(x['trade_time'])
-    for c in ['open','close','high','low','vol','amount']: x[c]=pd.to_numeric(x[c],errors='coerce')
-    x=x.dropna(subset=['trade_time','close']).sort_values('trade_time').reset_index(drop=True)
-    x['close']=x['close'].replace(0,pd.NA).ffill().bfill(); x['open']=x['open'].where(x['open']>0,x['close'])
-    hi=x[['open','close']].max(axis=1); lo=x[['open','close']].min(axis=1)
-    x['high']=pd.concat([x['high'],hi],axis=1).max(axis=1); x['low']=pd.concat([x['low'],lo],axis=1).min(axis=1)
-    x['vol']=x['vol'].fillna(0).clip(lower=0); x['amount']=x['amount'].fillna(x['close']*x['vol']*100).clip(lower=0)
-    target=f'{date[:4]}-{date[4:6]}-{date[6:]}'
-    x=x[x.trade_time.dt.strftime('%Y-%m-%d')==target].reset_index(drop=True)
-    need='14:45' if (date,code) in SIGNAL else '10:00'; minimum=180 if need=='14:45' else 25
-    if x.empty or x.trade_time.max().strftime('%H:%M')<need or len(x[x.trade_time.dt.strftime('%H:%M')<=need])<minimum:
-        raise ValueError(f'incomplete {date} {code} rows={len(x)}')
-    return x[['trade_time','open','close','high','low','vol','amount']]
+def symbol(code: str) -> str:
+    n = code.split('.')[0]
+    if code.endswith('.SH'):
+        return 'sh' + n
+    if code.endswith('.SZ'):
+        return 'sz' + n
+    return 'bj' + n
 
-def tx_ticks(date,code):
-    code2=sym(code)
-    url=f'https://stock.gtimg.cn/data/index.php?appn=detail&action=download&c={code2}&d={date}'
-    r=S.get(url,timeout=15); r.raise_for_status()
-    raw=r.content
-    text=raw.decode('gb18030',errors='replace').replace('\ufeff','')
-    (OUT/f'tick_raw_{date}_{code2}.txt').write_text(text[:20000],encoding='utf-8')
-    ticks=[]
-    for line in text.splitlines():
-        line=line.strip()
-        if not line: continue
-        parts=line.split('\t')
-        if len(parts)<4: parts=re.split(r'\s+',line)
-        if len(parts)>=4 and re.fullmatch(r'\d{2}:\d{2}:\d{2}',parts[0]):
-            try:
-                t=parts[0]; p=float(parts[1].replace(',','')); vol=float(parts[3].replace(',',''))
-                amt=float(parts[4].replace(',','')) if len(parts)>4 and re.fullmatch(r'-?[\d,.]+',parts[4]) else p*vol*100
-                ticks.append((t,p,vol,amt))
-            except Exception: pass
-    if not ticks:
-        for seg in text.replace('\n','').split('|'):
-            a=seg.split('/')
-            try:
-                idx=next(i for i,z in enumerate(a) if re.fullmatch(r'\d{2}:\d{2}:\d{2}',z))
-                t=a[idx]; p=float(a[idx+1]); vol=float(a[idx+3]); amt=float(a[idx+4]) if len(a)>idx+4 else p*vol*100
-                ticks.append((t,p,vol,amt))
-            except Exception: pass
-    if not ticks: raise ValueError(f'no tick rows; bytes={len(raw)} head={text[:300]!r}')
-    day=f'{date[:4]}-{date[4:6]}-{date[6:]}'
-    df=pd.DataFrame(ticks,columns=['time','price','vol','amount'])
-    df['trade_time']=pd.to_datetime(day+' '+df['time'])
-    df=df[(df.trade_time.dt.strftime('%H:%M')>='09:30')&(df.trade_time.dt.strftime('%H:%M')<='15:00')].sort_values('trade_time')
-    df['minute']=df.trade_time.dt.floor('min')
-    bars=df.groupby('minute',as_index=False).agg(open=('price','first'),close=('price','last'),high=('price','max'),low=('price','min'),vol=('vol','sum'),amount=('amount','sum')).rename(columns={'minute':'trade_time'})
-    return clean(bars,date,code)
 
-def tx_day(date,code):
-    code2=sym(code); r=S.get(f'https://web.ifzq.gtimg.cn/appstock/app/day/query?code={code2}',timeout=6); r.raise_for_status(); j=r.json()
-    root=(j.get('data') or {}).get(code2); found=None
-    def walk(o):
+def sanitize(frame: pd.DataFrame) -> pd.DataFrame:
+    d = frame.copy()
+    d['trade_time'] = pd.to_datetime(d['trade_time'])
+    for c in ['open', 'close', 'high', 'low', 'vol', 'amount']:
+        d[c] = pd.to_numeric(d[c], errors='coerce')
+    d = d.dropna(subset=['trade_time', 'open', 'close', 'high', 'low']).sort_values('trade_time').reset_index(drop=True)
+    d['vol'] = d['vol'].fillna(0).clip(lower=0)
+    d['amount'] = d['amount'].fillna(d['close'] * d['vol']).clip(lower=0)
+    return d[['trade_time', 'open', 'close', 'high', 'low', 'vol', 'amount']]
+
+
+def sina_5m(date: str, code: str) -> pd.DataFrame:
+    url = (
+        'https://quotes.sina.cn/cn/api/json_v2.php/'
+        'CN_MarketDataService.getKLineData?'
+        f'symbol={symbol(code)}&scale=5&ma=no&datalen=1023'
+    )
+    r = SESSION.get(url, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    target = f'{date[:4]}-{date[4:6]}-{date[6:]}'
+    rows = []
+    for x in data:
+        if not str(x.get('day', '')).startswith(target):
+            continue
+        close = float(x['close'])
+        vol = float(x.get('volume', 0) or 0)
+        amount = float(x.get('amount', 0) or 0)
+        if amount <= 0:
+            amount = close * vol
+        rows.append({
+            'trade_time': pd.Timestamp(x['day']),
+            'open': float(x['open']),
+            'close': close,
+            'high': float(x['high']),
+            'low': float(x['low']),
+            'vol': vol,
+            'amount': amount,
+        })
+    d = sanitize(pd.DataFrame(rows))
+    if d.empty or d['trade_time'].max().strftime('%H:%M') < '14:45' or len(d) < 45:
+        raise RuntimeError(f'Sina 5m incomplete {date} {code}: rows={len(d)}')
+    print(f'SOURCE {date} {code}: sina_5m rows={len(d)}', flush=True)
+    return d
+
+
+def tencent_1m(date: str, code: str) -> pd.DataFrame:
+    sym = symbol(code)
+    url = f'https://web.ifzq.gtimg.cn/appstock/app/day/query?code={sym}'
+    r = SESSION.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/'})
+    r.raise_for_status()
+    root = (r.json().get('data') or {}).get(sym)
+    found = None
+
+    def walk(obj):
         nonlocal found
-        if found is not None:return
-        if isinstance(o,dict):
-            if str(o.get('date','')).replace('-','')==date and isinstance(o.get('data'),list): found=o['data']; return
-            for z in o.values(): walk(z)
-        elif isinstance(o,list):
-            for z in o: walk(z)
+        if found is not None:
+            return
+        if isinstance(obj, dict):
+            if str(obj.get('date', '')).replace('-', '') == date and isinstance(obj.get('data'), list):
+                found = obj['data']
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
     walk(root)
-    if not found: raise FileNotFoundError(f'tencent {date} {code}')
-    day=f'{date[:4]}-{date[4:6]}-{date[6:]}'; rows=[]; pc=None; pv=pa=0.0
-    for z in found:
-        if not isinstance(z,str):continue
-        a=z.split()
-        if len(a)<3:continue
-        t,p,cv=a[0],float(a[1]),float(a[2]); ca=float(a[3]) if len(a)>3 else p*cv*100
-        op=p if pc is None else pc
-        rows.append({'trade_time':pd.Timestamp(f'{day} {t[:2]}:{t[2:]}'),'open':op,'close':p,'high':max(op,p),'low':min(op,p),'vol':max(0,cv-pv),'amount':max(0,ca-pa)})
-        pc,pv,pa=p,cv,ca
-    return clean(pd.DataFrame(rows),date,code)
+    if not found:
+        raise RuntimeError(f'Tencent 1m date missing {date} {code}')
 
-def east(date,code):
-    sec=('1.' if code.endswith('.SH') else '0.')+code.split('.')[0]
-    url=('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid='+sec+'&ndays=5&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58')
-    r=S.get(url,timeout=6); r.raise_for_status(); seq=((r.json().get('data') or {}).get('trends') or [])
-    target=f'{date[:4]}-{date[4:6]}-{date[6:]}'; rows=[]
-    for z in seq:
-        a=z.split(',')
-        if len(a)>=7 and a[0].startswith(target): rows.append({'trade_time':pd.Timestamp(a[0]),'open':float(a[1]),'close':float(a[2]),'high':float(a[3]),'low':float(a[4]),'vol':float(a[5]),'amount':float(a[6])})
-    return clean(pd.DataFrame(rows),date,code)
+    day = f'{date[:4]}-{date[4:6]}-{date[6:]}'
+    rows = []
+    prev_price = None
+    prev_vol = 0.0
+    prev_amount = 0.0
+    for item in found:
+        if not isinstance(item, str):
+            continue
+        a = item.split()
+        if len(a) < 3:
+            continue
+        hhmm = a[0]
+        price = float(a[1])
+        cum_vol = float(a[2])
+        cum_amount = float(a[3]) if len(a) > 3 else price * cum_vol
+        op = price if prev_price is None else prev_price
+        rows.append({
+            'trade_time': pd.Timestamp(f'{day} {hhmm[:2]}:{hhmm[2:]}'),
+            'open': op,
+            'close': price,
+            'high': max(op, price),
+            'low': min(op, price),
+            'vol': max(0.0, cum_vol - prev_vol),
+            'amount': max(0.0, cum_amount - prev_amount),
+        })
+        prev_price, prev_vol, prev_amount = price, cum_vol, cum_amount
+    d = sanitize(pd.DataFrame(rows))
+    morning = d[(d.trade_time.dt.strftime('%H:%M') >= '09:30') & (d.trade_time.dt.strftime('%H:%M') <= '10:00')]
+    if len(morning) < 25:
+        raise RuntimeError(f'Tencent 1m incomplete {date} {code}: morning_rows={len(morning)} total={len(d)}')
+    print(f'SOURCE {date} {code}: tencent_1m rows={len(d)}', flush=True)
+    return d
 
-def minute(date,code):
-    if date=='20260717':
-        sources=[('tencent_ticks',lambda:tx_ticks(date,code)),('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent_day',lambda:tx_day(date,code))]
-    elif (date,code) in SIGNAL:
-        sources=[('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent_ticks',lambda:tx_ticks(date,code)),('tencent_day',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
-    else:
-        sources=[('tencent_day',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
-    errs=[]
-    for name,fn in sources:
-        try:
-            d=fn(); print(f'SOURCE {date} {code} {name} {len(d)}',flush=True); return d
-        except Exception as e: errs.append(f'{name}:{e}')
-    raise RuntimeError(' | '.join(errs))
 
-def daily(date):
-    try:return ORIG_DAILY(date)
-    except Exception:
-        rows=[]
-        for _,s in SAMPLES[SAMPLES.next_trade_date==date].iterrows():
-            sd=v.row_for(ORIG_DAILY(s.signal_date),s.ts_code); rows.append({'ts_code':s.ts_code,'pre_close':float(sd['close']),'close':math.nan})
-        if not rows:raise
-        return pd.DataFrame(rows).drop_duplicates('ts_code')
+def minute_for(date: str, code: str) -> pd.DataFrame:
+    if date == '20260717':
+        return sina_5m(date, code)
+    if date == '20260720':
+        return tencent_1m(date, code)
+    raise RuntimeError(f'unexpected date {date}')
 
-def ratio(code,name):
-    if code.endswith('.BJ'):return .30
-    if code.startswith(('300','301','688')):return .20
-    if 'ST' in name.upper():return .05
-    return .10
 
-def limits(date):
-    try:return ORIG_LIMITS(date)
-    except Exception:
-        d=daily(date); rows=[]
-        for _,s in SAMPLES[SAMPLES.next_trade_date==date].iterrows():
-            pre=float(v.row_for(d,s.ts_code)['pre_close']); up=float(Decimal(str(pre*(1+ratio(s.ts_code,s.stock_name)))).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)); rows.append({'ts_code':s.ts_code,'up_limit':up})
-        if not rows:raise
-        return pd.DataFrame(rows).drop_duplicates('ts_code')
+def find_entry_5m(df: pd.DataFrame, first_open):
+    if first_open is None:
+        i = len(df) - 1
+        return i, float(df.iloc[i]['close']), 'sina_5m_signal_close_no_open_detected'
+    for i in range(first_open, len(df) - 1):
+        r = df.iloc[i]
+        if r['trade_time'].strftime('%H:%M') > '14:45':
+            break
+        if r['return_pct'] >= 8.0 and r['close'] >= r['vwap'] and not bool(r['close_on_limit']):
+            j = i + 1
+            while j < len(df) and bool(df.iloc[j]['close_on_limit']):
+                j += 1
+            if j < len(df):
+                return j, float(df.iloc[j]['open']), 'sina_5m_stable_bar_next_open'
+    i = len(df) - 1
+    return i, float(df.iloc[i]['close']), 'sina_5m_signal_close_after_no_fill'
 
-def entry_all(d,fo):
-    i,p,s=ORIG_ENTRY(d,fo)
-    if p is not None:return i,p,s
-    i=len(d)-1; return i,float(d.iloc[i].close),'conservative_signal_close_after_no_fill'
 
-v.minute_for=minute; v.daily_for=daily; v.limits_for=limits; v.find_entry=entry_all
+v.minute_for = minute_for
+v.find_entry = find_entry_5m
 v.main()
