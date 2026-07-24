@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - validate_t1.py
+      - validate_t1_v2.py
       - samples.csv
       - .github/workflows/run_t1_validation.yml
   pull_request:
     paths:
       - validate_t1.py
+      - validate_t1_v2.py
       - probe_source.py
       - samples.csv
       - run_trigger.txt
@@ -34,9 +36,11 @@ jobs:
       - name: Install dependencies
         run: pip install pandas requests
 
-      - name: Run probe or validation
+      - name: Run final validation
         run: |
-          if [ -f probe_source.py ]; then
+          if [ -f validate_t1_v2.py ]; then
+            python validate_t1_v2.py
+          elif [ -f probe_source.py ]; then
             python probe_source.py
           else
             python validate_t1.py
