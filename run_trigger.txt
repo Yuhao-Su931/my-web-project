@@ -1,1 +1,1 @@
-Run final 35-sample T+1 validation with full-market minute fallbacks.
+Run sanitized corrected-OHLC final 35-sample validation now.
