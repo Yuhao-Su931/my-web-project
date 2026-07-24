@@ -68,8 +68,12 @@ def east(date,code):
     return clean(pd.DataFrame(rows),date,code)
 
 def minute(date,code):
+    if (date,code) in SIGNAL:
+        sources=[('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
+    else:
+        sources=[('tencent',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]
     errs=[]
-    for name,fn in [('github',lambda:clean(ORIG_MIN(date,code),date,code)),('tencent',lambda:tx_day(date,code)),('eastmoney',lambda:east(date,code))]:
+    for name,fn in sources:
         try:
             d=fn(); print(f'SOURCE {date} {code} {name} {len(d)}',flush=True); return d
         except Exception as e: errs.append(f'{name}:{e}')
