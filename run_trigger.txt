@@ -1,1 +1,1 @@
-Run the final full 35-sample T+1 validation with Eastmoney and Tencent fallbacks.
+Run completeness-checked final 35-sample T+1 validation.
