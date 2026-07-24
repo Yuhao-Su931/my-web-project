@@ -3,10 +3,16 @@
 """Final wrapper: reject incomplete minute files before running v2."""
 import validate_t1_v2 as v
 
+_call_number = 0
 
-def complete_minute(date, code, required_end='10:00'):
+
+def complete_minute(date, code):
+    global _call_number
+    is_signal_day_call = (_call_number % 2 == 0)
+    _call_number += 1
+    required_end = '14:45' if is_signal_day_call else '10:00'
+    minimum_rows = 190 if is_signal_day_call else 25
     errors = []
-    minimum_rows = 25 if required_end <= '10:00' else 190
     for name, getter in [
         ('github', v.minute_github),
         ('eastmoney', v.minute_eastmoney),
