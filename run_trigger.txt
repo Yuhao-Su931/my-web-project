@@ -1,1 +1,1 @@
-Run completeness-checked final 35-sample T+1 validation.
+Run corrected-OHLC final 35-sample T+1 validation.
