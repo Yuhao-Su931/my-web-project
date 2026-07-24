@@ -6,16 +6,11 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import pandas as pd
 import requests
-
-ROOT=Path(__file__).resolve().parent
-OUT=ROOT/'results';OUT.mkdir(exist_ok=True)
+ROOT=Path(__file__).resolve().parent;OUT=ROOT/'results';OUT.mkdir(exist_ok=True)
 S=requests.Session();S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://quote.eastmoney.com/'})
-GH='https://raw.githubusercontent.com/njedu2023-prog/top10-decision/main'
-CACHE={}
-BUY_BPS=4.5;SELL_BPS=9.5
+GH='https://raw.githubusercontent.com/njedu2023-prog/top10-decision/main';CACHE={};BUY_BPS=4.5;SELL_BPS=9.5
 
-def get_json(url):
-    r=S.get(url,timeout=8);r.raise_for_status();return r.json()
+def get_json(url):r=S.get(url,timeout=8);r.raise_for_status();return r.json()
 def get_csv(url):
     if url in CACHE:return CACHE[url].copy()
     r=S.get(url,timeout=8);r.raise_for_status();r.encoding='utf-8-sig';d=pd.read_csv(io.StringIO(r.text));d.columns=[str(c).lstrip('\ufeff') for c in d.columns];CACHE[url]=d;return d.copy()
@@ -31,29 +26,33 @@ def limit_ratio(code,name):
     if 'ST' in name.upper():return .05
     return .10
 
+def clean_minute(d):
+    d=d.copy().sort_values('trade_time').reset_index(drop=True)
+    for c in ['open','close','high','low']:d[c]=pd.to_numeric(d[c],errors='coerce')
+    d['close']=d['close'].replace(0,pd.NA).ffill().bfill();d['open']=d['open'].where(d['open']>0,d['close'])
+    mx=d[['open','close']].max(axis=1);mn=d[['open','close']].min(axis=1)
+    d['high']=d['high'].where(d['high']>0,mx);d['low']=d['low'].where(d['low']>0,mn);d['high']=pd.concat([d.high,mx],axis=1).max(axis=1);d['low']=pd.concat([d.low,mn],axis=1).min(axis=1)
+    d=d.dropna(subset=['open','close','high','low'])
+    if d.empty or float(d.iloc[0].open)<=0:raise ValueError('invalid prices after cleaning')
+    return d.reset_index(drop=True)
 def minute_eastmoney(date,code):
-    url=('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid='+secid(code)+
-         '&ndays=5&iscr=0&iscca=0&ut=fa5fd1943c7b386f172d6893dbfba10b&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58')
+    url=('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid='+secid(code)+'&ndays=5&iscr=0&iscca=0&ut=fa5fd1943c7b386f172d6893dbfba10b&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58')
     j=get_json(url);seq=((j.get('data') or {}).get('trends') or []);prefix=f'{date[:4]}-{date[4:6]}-{date[6:]}';rows=[]
     for x in seq:
         a=x.split(',')
-        if len(a)>=8 and a[0].startswith(prefix):
-            rows.append({'trade_time':pd.Timestamp(a[0]),'open':float(a[1]),'close':float(a[2]),'high':float(a[3]),'low':float(a[4]),'vol':float(a[5]),'amount':float(a[6])})
+        if len(a)>=8 and a[0].startswith(prefix):rows.append({'trade_time':pd.Timestamp(a[0]),'open':float(a[1]),'close':float(a[2]),'high':float(a[3]),'low':float(a[4]),'vol':float(a[5]),'amount':float(a[6])})
     if len(rows)<25:raise FileNotFoundError(f'eastmoney {date} {code} rows={len(rows)}')
-    return pd.DataFrame(rows).sort_values('trade_time').reset_index(drop=True),'eastmoney'
+    return clean_minute(pd.DataFrame(rows)),'eastmoney'
 def minute_tencent(date,code):
-    prefix='sh' if code.endswith('.SH') else 'sz' if code.endswith('.SZ') else 'bj';symbol=prefix+code.split('.')[0]
-    j=get_json(f'https://web.ifzq.gtimg.cn/appstock/app/day/query?code={symbol}')
-    node=((j.get('data') or {}).get(symbol) or {});arr=node.get('data') or []
-    day=next((x for x in arr if str(x.get('date'))==date),None)
+    prefix='sh' if code.endswith('.SH') else 'sz' if code.endswith('.SZ') else 'bj';symbol=prefix+code.split('.')[0];j=get_json(f'https://web.ifzq.gtimg.cn/appstock/app/day/query?code={symbol}');arr=(((j.get('data') or {}).get(symbol) or {}).get('data') or []);day=next((x for x in arr if str(x.get('date'))==date),None)
     if not day:raise FileNotFoundError(f'tencent {date} {code}')
     rows=[]
     for x in day.get('data',[]):
-        a=x.split();t=a[0];price=float(a[1]);cv=float(a[2]);ca=float(a[3]);rows.append({'trade_time':pd.Timestamp(f'{date[:4]}-{date[4:6]}-{date[6:]} {t[:2]}:{t[2:]}'),'close':price,'cumv':cv,'cuma':ca})
+        a=x.split();t=a[0];p=float(a[1]);cv=float(a[2]);ca=float(a[3]);rows.append({'trade_time':pd.Timestamp(f'{date[:4]}-{date[4:6]}-{date[6:]} {t[:2]}:{t[2:]}'),'close':p,'cumv':cv,'cuma':ca})
     d=pd.DataFrame(rows).sort_values('trade_time').reset_index(drop=True)
     if len(d)<25:raise FileNotFoundError(f'tencent rows={len(d)}')
     d['open']=d.close.shift(1).fillna(d.close);d['high']=d[['open','close']].max(axis=1);d['low']=d[['open','close']].min(axis=1);d['vol']=d.cumv.diff().fillna(d.cumv);d['amount']=d.cuma.diff().fillna(d.cuma)
-    return d[['trade_time','open','close','high','low','vol','amount']],'tencent'
+    return clean_minute(d[['trade_time','open','close','high','low','vol','amount']]),'tencent'
 def minute(date,code):
     errors=[]
     for fn in (minute_eastmoney,minute_tencent):
@@ -64,8 +63,7 @@ def minute(date,code):
 def classify(w):
     e=w.iloc[:3];op=float(w.iloc[0].open);drop=(float(e.low.min())/op-1)*100;rise=(float(e.high.max())/op-1)*100
     return 'direct_drop_then_rebound' if drop<=-1 and (abs(drop)>=rise or float(e.iloc[-1].close)<op) else 'rally_or_high_level_oscillation'
-def next_fill(w,i):
-    j=min(i+1,len(w)-1);return j,w.iloc[j].trade_time,float(w.iloc[j].open)
+def next_fill(w,i):j=min(i+1,len(w)-1);return j,w.iloc[j].trade_time,float(w.iloc[j].open)
 def exit_rule(d,entry,pre,up):
     hm=d.trade_time.dt.strftime('%H:%M');w=d[(hm>='09:30')&(hm<='10:00')].copy().reset_index(drop=True)
     if len(w)<25:raise RuntimeError(f'incomplete T1 window rows={len(w)}')
@@ -92,7 +90,6 @@ def exit_rule(d,entry,pre,up):
         if fp is None:si=fi=len(w)-1;ft=w.iloc[-1].trade_time;fp=float(w.iloc[-1].close);reason='absolute_time_stop'
     win=w.iloc[:fi+1];hi_i=int(win.high.idxmax());wh=float(w.iloc[hi_i].high);wl=float(win.low.min());net=((fp*(1-SELL_BPS/10000))/(entry*(1+BUY_BPS/10000))-1)*100
     return {'t1_open':op,'t1_open_return_pct':(op/pre-1)*100,'first_wave_mode':mode,'window_high_time':w.iloc[hi_i].trade_time.strftime('%H:%M'),'window_high_return_pct':(wh/pre-1)*100,'window_low_return_pct':(wl/pre-1)*100,'exit_signal_time':w.iloc[si].trade_time.strftime('%H:%M'),'exit_fill_time':pd.Timestamp(ft).strftime('%H:%M'),'exit_price':fp,'exit_reason':reason,'gross_return_pct':(fp/entry-1)*100,'net_return_pct':net,'mfe_pct':(wh/entry-1)*100,'mae_pct':(wl/entry-1)*100}
-
 def main():
     samples=pd.read_csv(ROOT/'samples.csv',dtype=str);rows=[]
     for i,s in samples.iterrows():
