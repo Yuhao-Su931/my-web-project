@@ -1,91 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Final wrapper: correct OHLC, clean zero auction prices, reject incomplete files."""
-import pandas as pd
-import validate_t1_v2 as v
+from pathlib import Path
+import requests
 
-_call_number = 0
-
-
-def corrected_eastmoney(date, code):
-    url = (
-        'https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=' + v.secid(code) +
-        '&ndays=10&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'
-        '&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
-    )
-    j = v.req_json(url)
-    seq = ((j.get('data') or {}).get('trends') or [])
-    rows = []
-    day_prefix = f'{date[:4]}-{date[4:6]}-{date[6:]}'
-    for x in seq:
-        a = x.split(',')
-        if len(a) < 8 or not a[0].startswith(day_prefix):
-            continue
-        rows.append({
-            'trade_time': pd.Timestamp(a[0]),
-            'open': float(a[1]),
-            'close': float(a[2]),
-            'high': float(a[3]),
-            'low': float(a[4]),
-            'vol': float(a[5]),
-            'amount': float(a[6]),
-        })
-    if not rows:
-        raise FileNotFoundError(f'Eastmoney {date} {code}')
-    return pd.DataFrame(rows).sort_values('trade_time').reset_index(drop=True)
-
-
-v.minute_eastmoney = corrected_eastmoney
-
-
-def sanitize_prices(frame):
-    frame = frame.copy()
-    for col in ['open', 'close', 'high', 'low']:
-        frame[col] = pd.to_numeric(frame[col], errors='coerce')
-    frame['close'] = frame['close'].replace(0, pd.NA).ffill().bfill()
-    frame['open'] = frame['open'].where(frame['open'] > 0, frame['close'])
-    fallback_high = frame[['open', 'close']].max(axis=1)
-    fallback_low = frame[['open', 'close']].min(axis=1)
-    frame['high'] = frame['high'].where(frame['high'] > 0, fallback_high)
-    frame['low'] = frame['low'].where(frame['low'] > 0, fallback_low)
-    frame['high'] = pd.concat([frame['high'], fallback_high], axis=1).max(axis=1)
-    frame['low'] = pd.concat([frame['low'], fallback_low], axis=1).min(axis=1)
-    if frame[['open', 'close', 'high', 'low']].isna().any().any():
-        raise ValueError('unrepairable zero/NA price')
-    return frame
-
-
-def complete_minute(date, code):
-    global _call_number
-    is_signal_day_call = (_call_number % 2 == 0)
-    _call_number += 1
-    required_end = '14:45' if is_signal_day_call else '10:00'
-    minimum_rows = 190 if is_signal_day_call else 25
-    errors = []
-    for name, getter in [
-        ('github', v.minute_github),
-        ('eastmoney', v.minute_eastmoney),
-        ('tencent', v.minute_tencent),
-    ]:
-        try:
-            frame = sanitize_prices(getter(date, code))
-            if frame.empty:
-                raise ValueError('empty minute data')
-            last_time = frame.trade_time.max().strftime('%H:%M')
-            first_time = frame.trade_time.min().strftime('%H:%M')
-            rows_to_deadline = len(
-                frame[frame.trade_time.dt.strftime('%H:%M') <= required_end]
-            )
-            if last_time < required_end or rows_to_deadline < minimum_rows:
-                raise ValueError(
-                    f'incomplete rows={len(frame)} first={first_time} '
-                    f'last={last_time} required_end={required_end}'
-                )
-            return frame, name
-        except Exception as exc:
-            errors.append(f'{name}:{exc}')
-    raise RuntimeError(' | '.join(errors))
-
-
-v.minute = complete_minute
-v.main()
+out=Path(__file__).resolve().parent/'results'
+out.mkdir(exist_ok=True)
+url='https://stock.gtimg.cn/data/index.php?appn=detail&action=download&c=sh600992&d=20260717'
+try:
+    r=requests.get(url,timeout=10,headers={'User-Agent':'Mozilla/5.0'})
+    text=r.content.decode('gb18030',errors='replace')
+    result='status='+str(r.status_code)+'\nbytes='+str(len(r.content))+'\n'+text[:20000]
+except Exception as e:
+    result='error='+repr(e)
+(out/'tick_probe.txt').write_text(result,encoding='utf-8')
+print(result[:4000])
